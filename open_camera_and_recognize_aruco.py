@@ -18,14 +18,21 @@ import cv2
 # 1. Camera Initialization
 # ======================================================================
  
-# 1.1 Open the default camera (0) and store the capture object in 'cap' 
-cap = cv2.VideoCapture(0)
+# 1.1 Open the default camera (0) and store the capture object in 'cap'
+# Choosing different video codec / backend 
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 
 # 1.2 Check if camera opened successfully
 if not cap.isOpened():
     print("Error: Could not open camera.")
     exit()
     
+# 1.3 Request higher frame rate
+cap.set(cv2.CAP_PROP_FPS, 60)
+
+# 1.4 Setting lower resolution to get less data per frame
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 # ======================================================================
 # 2. OpenCV AruCo Marker Detection Parameters
@@ -76,9 +83,9 @@ while True:
 
     # 3.4 Draw the detected corners and display id on the frame
     # ----------------------------------------------------------------------
-    edited_frame = frame.copy()
+    edited_frame = gray_frame.copy()
     if ids is not None:
-        edited_frame = cv2.aruco.drawDetectedMarkers(frame, corners, ids, borderColor=(0,255,0))
+        edited_frame = cv2.aruco.drawDetectedMarkers(gray_frame, corners, ids, borderColor=(0,255,0))
 
     # 3.5 Display the resulting frame - edited_frame
     # ----------------------------------------------------------------------
