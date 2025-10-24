@@ -1,0 +1,4 @@
+import cv2, time, concurrent.futures, multiprocessing
+
+# count cores
+print("Cores:", multiprocessing.cpu_count())
