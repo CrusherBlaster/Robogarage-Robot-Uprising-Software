@@ -9,13 +9,14 @@ cap = cv2.VideoCapture(0)
 
 # Create a window for trackbars
 cv2.namedWindow("Trackbars")
-
+# 'blue': ((90, 130, 114), (113, 255, 255))
+# 
 # Create HSV trackbars
-cv2.createTrackbar("LH", "Trackbars", 0, 179, nothing)
-cv2.createTrackbar("UH", "Trackbars", 25, 179, nothing)
-cv2.createTrackbar("LS", "Trackbars", 120, 255, nothing)
+cv2.createTrackbar("LH", "Trackbars", 90, 179, nothing)
+cv2.createTrackbar("UH", "Trackbars", 113, 179, nothing)
+cv2.createTrackbar("LS", "Trackbars", 130, 255, nothing)
 cv2.createTrackbar("US", "Trackbars", 255, 255, nothing)
-cv2.createTrackbar("LV", "Trackbars", 120, 255, nothing)
+cv2.createTrackbar("LV", "Trackbars", 114, 255, nothing)
 cv2.createTrackbar("UV", "Trackbars", 255, 255, nothing)
 
 while True:
