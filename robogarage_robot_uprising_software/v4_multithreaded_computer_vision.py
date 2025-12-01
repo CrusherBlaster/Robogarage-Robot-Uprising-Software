@@ -22,15 +22,7 @@ HSV_RANGES = {
     'orange': ((0, 127, 168), (10, 255, 255)),
 }
 
-MORPH_CLOSE_KERNEL = np.ones((0, 0), np.uint8)
-MORPH_OPEN_KERNEL = np.ones((6, 6), np.uint8)
-PEAKS_OPEN_KERNEL = np.ones((7, 7), np.uint8)
-
-MIN_CONTOUR_AREA = 250
-MAX_CONTOUR_AREA = 100000
-
 SMOOTHING_ALPHA = 0.25
-
 
 frame_lock = threading.Lock()
 aruco_lock = threading.Lock()
@@ -44,9 +36,9 @@ stop_requested = False
 balls_tracked = {}
 next_local_ball_id = 0
 ball_count = 0
-debug_1 = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
-debug_2 = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
-debug_3 = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+aruco_params = cv2.aruco.DetectorParameters()
+aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
 if not USE_TEST_IMAGE:
     cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
@@ -80,12 +72,6 @@ def get_frame():
         frame = cv2.resize(frame, (FRAME_W, FRAME_H), interpolation=cv2.INTER_AREA)
         with frame_lock:
             latest_frame = frame.copy()
-
-
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-aruco_params = cv2.aruco.DetectorParameters()
-aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
-
 
 def get_aruco():
     global latest_corners, latest_ids, latest_frame, stop_requested
