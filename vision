@@ -1,0 +1,223 @@
+import cv2
+import numpy as np
+import threading
+import time
+import math
+
+USE_TEST_IMAGE = True
+TEST_IMAGE_PATH = r"C:\Users\leevi\Desktop\blue_floorballs_all.png"
+CAMERA_INDEX = 0
+FRAME_W = 960
+FRAME_H = 960
+FPS = 60
+
+HSV_RANGES = {
+    'blue': ((90, 130, 114), (113, 255, 255)),
+    'orange': ((0, 127, 168), (10, 255, 255)),
+}
+
+MORPH_CLOSE_KERNEL = np.ones((0, 0), np.uint8)
+MORPH_OPEN_KERNEL = np.ones((6, 6), np.uint8)
+PEAKS_OPEN_KERNEL = np.ones((7, 7), np.uint8)
+
+MIN_CONTOUR_AREA = 250
+MAX_CONTOUR_AREA = 100000
+SMOOTHING_ALPHA = 0.25
+
+frame_lock = threading.Lock()
+aruco_lock = threading.Lock()
+balls_lock = threading.Lock()
+
+latest_frame = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+latest_corners = None
+latest_ids = None
+stop_requested = False
+
+balls_tracked = {}
+next_local_ball_id = 0
+ball_count = 0
+debug_1 = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+debug_2 = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+debug_3 = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+
+if not USE_TEST_IMAGE:
+    cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
+    if cap.isOpened():
+        cap.set(cv2.CAP_PROP_FPS, FPS)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_W)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
+
+def get_frame():
+    global latest_frame, stop_requested
+    if USE_TEST_IMAGE:
+        img = cv2.imread(TEST_IMAGE_PATH)
+        if img is None:
+            stop_requested = True
+            return
+        img = cv2.resize(img, (FRAME_W, FRAME_H), interpolation=cv2.INTER_AREA)
+        while not stop_requested:
+            with frame_lock:
+                latest_frame = img.copy()
+            time.sleep(1.0 / max(1, FPS))
+        return
+    while not stop_requested:
+        ret, frame = cap.read()
+        if not ret:
+            time.sleep(0.01)
+            continue
+        frame = cv2.resize(frame, (FRAME_W, FRAME_H), interpolation=cv2.INTER_AREA)
+        with frame_lock:
+            latest_frame = frame.copy()
+
+aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+aruco_params = cv2.aruco.DetectorParameters()
+aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
+
+def get_aruco():
+    global latest_corners, latest_ids, latest_frame, stop_requested
+    while not stop_requested:
+        with frame_lock:
+            aruco_frame = latest_frame.copy()
+        gray = cv2.cvtColor(aruco_frame, cv2.COLOR_BGR2GRAY)
+        corners, ids, rejected = aruco_detector.detectMarkers(gray)
+        with aruco_lock:
+            latest_corners, latest_ids = corners, ids
+        time.sleep(0.005)
+
+def compute_circularity(contour):
+    area = cv2.contourArea(contour)
+    perimeter = cv2.arcLength(contour, True)
+    if perimeter <= 1e-6:
+        return 0.0
+    return 4.0 * math.pi * area / (perimeter * perimeter)
+
+def process_and_display():
+    global latest_frame, latest_corners, latest_ids
+    global balls_tracked, next_local_ball_id, ball_count
+    global stop_requested, debug_1, debug_2, debug_3
+
+    def update_tracked_ball(local_id, x, y, r, color):
+        now = time.time()
+        entry = balls_tracked.get(local_id)
+        if entry is None:
+            balls_tracked[local_id] = {
+                'center_x': x, 'center_y': y, 'radius': r, 'color': color,
+                'last_seen': now, 'smoothed_center_x': x,
+                'smoothed_center_y': y, 'smoothed_radius': r
+            }
+            return
+        sx = entry['smoothed_center_x'] * (1 - SMOOTHING_ALPHA) + x * SMOOTHING_ALPHA
+        sy = entry['smoothed_center_y'] * (1 - SMOOTHING_ALPHA) + y * SMOOTHING_ALPHA
+        sr = entry['smoothed_radius'] * (1 - SMOOTHING_ALPHA) + r * SMOOTHING_ALPHA
+        entry.update({
+            'center_x': x, 'center_y': y, 'radius': r,
+            'last_seen': now, 'smoothed_center_x': sx,
+            'smoothed_center_y': sy, 'smoothed_radius': sr
+        })
+
+    def register_new_tracked_ball(x, y, r, color):
+        global next_local_ball_id
+        lid = next_local_ball_id
+        next_local_ball_id += 1
+        balls_tracked[lid] = {
+            'center_x': x, 'center_y': y, 'radius': r, 'color': color,
+            'last_seen': time.time(),
+            'smoothed_center_x': x, 'smoothed_center_y': y, 'smoothed_radius': r
+        }
+        return lid
+
+    def match_detections_to_tracked(dets):
+        tracked_items = list(balls_tracked.items())
+        used = set()
+        for det in dets:
+            x, y, r, color = det
+            best = None
+            best_d = None
+            for tid, tdata in tracked_items:
+                if tid in used: continue
+                if tdata['color'] != color: continue
+                d = math.hypot(tdata['center_x'] - x, tdata['center_y'] - y)
+                if best_d is None or d < best_d:
+                    best_d = d; best = tid
+            if best is not None and best_d < max(30, r * 1.5):
+                update_tracked_ball(best, x, y, r, color)
+                used.add(best)
+            else:
+                register_new_tracked_ball(x, y, r, color)
+        now = time.time()
+        for tid, tdata in list(balls_tracked.items()):
+            if now - tdata['last_seen'] > 0.01:
+                del balls_tracked[tid]
+
+    while not stop_requested:
+        with frame_lock:
+            frame = latest_frame.copy()
+        if frame is None or frame.size == 0:
+            time.sleep(0.01)
+            continue
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        all_detections = []
+        ball_count = 0
+
+        for color_name, (lower, upper) in HSV_RANGES.items():
+            mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
+            mask = cv2.GaussianBlur(mask, (11, 11), 0)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area < MIN_CONTOUR_AREA or area > MAX_CONTOUR_AREA:
+                    continue
+                (cx, cy), radius = cv2.minEnclosingCircle(contour)
+
+                x, y, w, h = cv2.boundingRect(contour)
+                pad = 6
+                x0 = max(0, x - pad)
+                y0 = max(0, y - pad)
+                x1 = min(frame.shape[1], x + w + pad)
+                y1 = min(frame.shape[0], y + h + pad)
+
+                roi_mask = mask[y0:y1, x0:x1]
+                roi_frame = frame[y0:y1, x0:x1]
+
+                _, roi_bin = cv2.threshold(roi_mask, 127, 255, cv2.THRESH_BINARY)
+                debug_1 = roi_bin
+
+                dist = cv2.distanceTransform(roi_bin, cv2.DIST_L2, 5)
+                if dist.max() <= 1e-6:
+                    all_detections.append((cx, cy, radius, color_name))
+                    continue
+
+                dist_norm = dist / dist.max()
+                _, peaks = cv2.threshold(dist_norm, 0.03 * dist.max(), 1.0, cv2.THRESH_BINARY)
+                peaks = (peaks * 255).astype('uint8')
+                debug_2 = peaks
+
+                n_labels, markers = cv2.connectedComponents(peaks)
+                if n_labels <= 1:
+                    all_detections.append((cx, cy, radius, color_name))
+                    continue
+
+                markers = markers + 1
+                markers[roi_bin == 0] = 0
+                markers[roi_bin == 1] = 1
+
+                n_labels += 1
+
+                try:
+                    ws = cv2.watershed(cv2.cvtColor(roi_frame, cv2.COLOR_BGR2RGB), markers)
+                except:
+                    all_detections.append((cx, cy, radius, color_name))
+                    continue
+
+                for lbl in range(2, n_labels + 1):
+                    m = np.uint8(ws == lbl)
+                    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if not cnts:
+                        continue
+                    cnt = max(cnts, key=cv2.contourArea)
+                    (mx, my), mr = cv2.minEnclosingCircle(cnt)
+                    all_detections.append((x0 + mx, y0 + my, mr, color_name))
+
+        match_detections_to_tracked(all_detections)
