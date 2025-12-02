@@ -22,7 +22,27 @@ HSV_RANGES = {
     'orange': ((0, 127, 168), (10, 255, 255)),
 }
 
-SMOOTHING_ALPHA = 0.25
+# Store the robot aruco marker corners (coordinates) here by id
+ROBOT_TEAMS = {
+    'team_1': {
+      'id_1': None, 
+      'id_2': None
+    },
+    'team_2': {
+        'id_3': None,
+        'id_4': None
+    }
+}
+
+# Define here storage for the fgur corners
+ARENA_CORNERS = {
+    'id_46': None,
+    'id_47': None,
+    'id_48': None,
+    'id_49': None
+}
+
+SMOOTHING_ALPHA = 0.9
 
 frame_lock = threading.Lock()
 aruco_lock = threading.Lock()
@@ -73,6 +93,19 @@ def get_frame():
         with frame_lock:
             latest_frame = frame.copy()
 
+def store_corner(marker_id, marker_corners):
+    robot_id = f"id_{marker_id}"
+
+    # Update robot teams
+    for team in ROBOT_TEAMS.values():
+        if robot_id in team:
+            team[robot_id] = marker_corners
+
+    # Update arena corners
+    if robot_id in ARENA_CORNERS:
+        ARENA_CORNERS[robot_id] = marker_corners
+
+
 def get_aruco():
     global latest_corners, latest_ids, latest_frame, stop_requested
     while not stop_requested:
@@ -80,6 +113,9 @@ def get_aruco():
             aruco_frame = latest_frame.copy()
         gray = cv2.cvtColor(aruco_frame, cv2.COLOR_BGR2GRAY)
         corners, ids, rejected = aruco_detector.detectMarkers(gray)
+        if ids is not None and len(corners) > 0:
+            for i, marker_id in enumerate(ids.flatten()):
+                store_corner(marker_id, corners[i])
         with aruco_lock:
             latest_corners, latest_ids = corners, ids
         time.sleep(0.005)
@@ -236,12 +272,51 @@ def process_and_display():
         display = frame.copy()
         # Drawing arucos to display frame
         with aruco_lock:
-            if latest_corners is not None and latest_ids is not None:
+            if latest_ids is not None and latest_corners is not None and len(latest_ids) > 0:
+                
+                for i, marker_id in enumerate(latest_ids.flatten()):
+                    marker_corners = latest_corners[i][0]  # shape (4,2)
+
+                    # Compute center of marker
+                    center_x = int(np.mean(marker_corners[:, 0]))
+                    center_y = int(np.mean(marker_corners[:, 1]))
+                    center = (center_x, center_y)
+
+                    # Convert id to string for dictionary
+                    key = f"id_{marker_id}"
+
+                    # ------------ ROBOTS ------------
+                    for team_name, team in ROBOT_TEAMS.items():
+                        if key in team:
+                            cv2.putText(
+                                display,
+                                f"{team_name} robot {marker_id}",
+                                center,
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.6,
+                                (0, 255, 255),
+                                2
+                            )
+
+                    # ------------ ARENA CORNERS ------------
+                    if key in ARENA_CORNERS:
+                        cv2.putText(
+                            display,
+                            f"Arena corner {marker_id}",
+                            (center_x + 10, center_y + 10),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (255, 0, 0),
+                            2
+                        )
+                    
                 cv2.aruco.drawDetectedMarkers(display, latest_corners, latest_ids)
+                
 
         # Drawing different size and color balls to the display frame
         with balls_lock:
             for tid, data in balls_tracked.items():
+                # TODO: If detected balls outside the drawn borderline - leave them out of the drawing
                 sx, sy, sr = int(data['smoothed_center_x']), int(data['smoothed_center_y']), int(data['smoothed_radius'])
                 color = (0, 255, 0) if data['color'] == 'blue' else (0, 0, 255)
                 cv2.circle(display, (sx, sy), sr, color, 2)
