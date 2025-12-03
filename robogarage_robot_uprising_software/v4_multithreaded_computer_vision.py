@@ -68,7 +68,13 @@ if not USE_TEST_IMAGE:
         cap.set(cv2.CAP_PROP_FPS, FPS)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_W)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
+        #cap.set(cv2.CAP_PROP_S, 5)  # LOWER = faster shutter
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # manual mode
+        cap.set(cv2.CAP_PROP_EXPOSURE, -6)        # adjust for your camera, helps with arucos
+        cap.set(cv2.CAP_PROP_GAIN, 0)
+        # TODO: GET LOWER EXPOSURE FRAME FOR ARUCOS AND NORMAL FRAME FOR BALLS ;) cuz this now breaks the previous workking color detection
 
+        
 def get_frame():
     global latest_frame, stop_requested
     if USE_TEST_IMAGE:
@@ -112,6 +118,7 @@ def get_aruco():
         with frame_lock:
             aruco_frame = latest_frame.copy()
         gray = cv2.cvtColor(aruco_frame, cv2.COLOR_BGR2GRAY)
+        
         corners, ids, rejected = aruco_detector.detectMarkers(gray)
         if ids is not None and len(corners) > 0:
             for i, marker_id in enumerate(ids.flatten()):
