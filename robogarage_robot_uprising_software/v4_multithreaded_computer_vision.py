@@ -69,10 +69,10 @@ if not USE_TEST_IMAGE:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_W)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
         #cap.set(cv2.CAP_PROP_S, 5)  # LOWER = faster shutter
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # manual mode
-        cap.set(cv2.CAP_PROP_EXPOSURE, -6)        # adjust for your camera, helps with arucos
-        cap.set(cv2.CAP_PROP_GAIN, 0)
-        # TODO: GET LOWER EXPOSURE FRAME FOR ARUCOS AND NORMAL FRAME FOR BALLS ;) cuz this now breaks the previous workking color detection
+        #cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # manual mode
+        #cap.set(cv2.CAP_PROP_EXPOSURE, -6)        # adjust for your camera, helps with arucos
+        #cap.set(cv2.CAP_PROP_GAIN, 0)
+        # TODO: GET LOWER EXPOSURE FRAME FOR ARUCOS AND NORMAL FRAME FOR BALLS ;) cuz low exposure frame kills hsv masks
 
         
 def get_frame():
