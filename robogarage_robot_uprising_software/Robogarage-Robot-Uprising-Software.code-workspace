@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"name": "Robogarage-Robot-Uprising-Software",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"cSpell.words": [
+			"imread",
+			"imwrite"
+		]
+	}
+}

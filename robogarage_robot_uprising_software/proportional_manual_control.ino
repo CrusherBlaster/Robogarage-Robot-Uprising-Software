@@ -1,32 +1,32 @@
-
-
 #include <Bluepad32.h>
 
 // =====================================================================
 // 1. Motor Pin Definitions, Constants
 // =====================================================================
 
-// For robot id 4 flips right pins due to hardware soldering error
-// #define LEFT_DIR_FORWARD 23
-// #define LEFT_DIR_BACKWARD 21
-// #define RIGHT_DIR_FORWARD 25
-// #define RIGHT_DIR_BACKWARD 33
 
-// For robots id 1-3
+// Robots ID 1-3:
 #define LEFT_DIR_FORWARD    23
 #define LEFT_DIR_BACKWARD   21
+#define LEFT_PWM            19
 #define RIGHT_DIR_FORWARD   33
 #define RIGHT_DIR_BACKWARD  25
+#define RIGHT_PWM           32
 
-#define LEFT_PWM 19
-#define RIGHT_PWM 32
 
-// According to the analogWrite it can only take values 0-255
+/* Robot ID 4:
+#define LEFT_DIR_FORWARD    21
+#define LEFT_DIR_BACKWARD   23
+#define LEFT_PWM            19
+#define RIGHT_DIR_FORWARD   33
+#define RIGHT_DIR_BACKWARD  25
+#define RIGHT_PWM           32 
+*/
+
 const uint8_t MAX_SPEED = 255;
 
 // We’ll keep the same “PS4Controller” style logic by mapping the
 // Bluepad32 joystick range (-511..512) to approx. -128..127.
-// Increase if stick is fluctuating over these values while at rest
 const int STICK_CENTER_MIN = -10; // Lower bound for center deadzone
 const int STICK_CENTER_MAX = 10;  // Upper bound for center deadzone
 
@@ -44,24 +44,16 @@ ControllerPtr myGamepad = nullptr;
 // ---------------------------------------------------------------------
 void spinLeftMotor(int16_t speed) {
   if (speed > 0) {
-    
     // Forward
     digitalWrite(LEFT_DIR_FORWARD, HIGH);
     digitalWrite(LEFT_DIR_BACKWARD, LOW);
     analogWrite(LEFT_PWM, speed);
-
-  } 
-  
-  else if (speed < 0) {
-    
+  } else if (speed < 0) {
     // Backward
     digitalWrite(LEFT_DIR_FORWARD, LOW);
     digitalWrite(LEFT_DIR_BACKWARD, HIGH);
     analogWrite(LEFT_PWM, -speed);
-
-  } 
-  
-  else {
+  } else {
     // Stop
     digitalWrite(LEFT_DIR_FORWARD, LOW);
     digitalWrite(LEFT_DIR_BACKWARD, LOW);
@@ -146,131 +138,61 @@ void handleGamepad(ControllerPtr ctl) {
   // Triggers as digital-style "pressed" flags
   bool l2_pressed = (ctl->brake()    > TRIGGER_THRESHOLD);  // L2 = brake()
   bool r2_pressed = (ctl->throttle() > TRIGGER_THRESHOLD);  // R2 = throttle()
+  int brake_map = map(ctl->brake(), 0, 1023, 0, 255);
+  int throttle_map = map(ctl->throttle(), 0, 1023, 0, 255);
 
 
   // --------------------------
   // 3.2.1 FORWARD (R2 only)
   // --------------------------
   if (r2_pressed && !l2_pressed) {
-    
-    // Proportional speed control
-    int forward_speed = MAX_SPEED;
-
-    int16_t left_speed  = forward_speed;
-    int16_t right_speed = forward_speed;
+    int16_t left_speed  = throttle_map;
+    int16_t right_speed = throttle_map;
 
     if (stick_outside_deadzone) {
-      
-      // Steer left: reverse left motor speed, keep right speed max forward
-      // Steer left: anti-clockwise circle motion to the left of the robot
+      // Turn left: reverse left motor speed
       if (left_stick_x < STICK_CENTER_MIN) {
-        
-        // Normalize steering: 0 = none , 0.5 = half, 1 = full
-        float steer_degree = float(abs(left_stick_x)) / 128.0f;
-        
-        // Convert steering to speed
-        // steer_degree = 0       -> +255     forward
-        // steer_degree = ]0,0.5[ -> 255-0    slight curve
-        // steer_degree = 0.5     -> 0        pivot turn
-        // steer_degree = ]0.5,1[ -> 0-(-255) harder turn
-        // steer_degree = 1       -> -255     hardest turn
-        left_speed = int16_t(forward_speed * (1.0f - 2.0f * steer_degree));
-
+        left_speed = map(left_stick_x, -128, STICK_CENTER_MIN, -throttle_map, throttle_map);
       }
-
-      // Steer right: reverse right motor speed, keep left motorspeed max forward
-      // Steer right: clockwise circle motion to the right of the robot
+      // Turn right: reverse right motor speed
       else if (left_stick_x > STICK_CENTER_MAX) {
-        
-        // Normalize steering: 0 = none , 0.5 = half, 1 = full
-        float steer_degree = float(abs(left_stick_x)) / 127.0f;
-        
-        // Convert steering to speed
-        // steer_degree = 0       -> +255     forward
-        // steer_degree = ]0,0.5[ -> 255-0    slight curve
-        // steer_degree = 0.5     -> 0        pivot turn
-        // steer_degree = ]0.5,1[ -> 0-(-255) harder turn
-        // steer_degree = 1       -> -255     hardest turn
-        right_speed = int16_t(forward_speed * (1.0f - 2.0f * steer_degree));
-
+        right_speed = map(left_stick_x, STICK_CENTER_MAX, 127, throttle_map, -throttle_map);
       }
 
-      // Putting the motor speed values the previous if or else if statement 
-      // defined into action
       spinLeftMotor(left_speed);
       spinRightMotor(right_speed);
-
-    } 
-    
-    else {
+    } else {
       // Straight forward
-      spinLeftMotor(forward_speed);
-      spinRightMotor(forward_speed);
+      spinLeftMotor(left_speed);
+      spinRightMotor(right_speed);
     }
   }
-
 
   // --------------------------
   // 3.2.2 BACKWARD (L2 only)
   // --------------------------
   else if (l2_pressed && !r2_pressed) {
-    
-    // Proportional speed control
-    int backward_speed = -MAX_SPEED;
-
-    int16_t left_speed  = backward_speed;
-    int16_t right_speed = backward_speed;
+    int16_t left_speed  = -brake_map;
+    int16_t right_speed = -brake_map;
 
     if (stick_outside_deadzone) {
-      
-
-      // Steer to the left: reverse left motor speed
-      // causes robot to go backward to the left clockwise circle motion
+      // Turn backwards to the right: reverse right motor speed
       if (left_stick_x < STICK_CENTER_MIN) {
-        
-         // Normalize steering: 0 = none , 0.5 = half, 1 = full
-        float steer_degree = float(abs(left_stick_x)) / 128.0f;
-        
-        // Convert steering to speed
-        // steer_degree = 0       -> -255     backward
-        // steer_degree = ]0,0.5[ -> -255-0    slight curve
-        // steer_degree = 0.5     -> 0        pivot turn
-        // steer_degree = ]0.5,1[ -> 0-255 harder turn
-        // steer_degree = 1       -> +255     hardest turn
-        left_speed = int16_t(backward_speed * (1.0f - 2.0f * steer_degree));
-
+        left_speed = map(left_stick_x, -128, STICK_CENTER_MIN, brake_map, -brake_map);
       }
-
-      // Steer to the right while going backwards: reverse right motor speed
-      // causes robot to go backwards to the right anti-clockwise circle motion
+      // Turn backwards to the left: reverse left motor speed
       else if (left_stick_x > STICK_CENTER_MAX) {
-        
-        // Normalize steering: 0 = none , 0.5 = half, 1 = full
-        float steer_degree = float(abs(left_stick_x)) / 127.0f;
-        
-        // Convert steering to speed
-        // steer_degree = 0       -> -255     forward
-        // steer_degree = ]0,0.5[ -> -255-0    slight curve
-        // steer_degree = 0.5     -> 0        pivot turn
-        // steer_degree = ]0.5,1[ -> 0-255 harder turn
-        // steer_degree = 1       -> +255     hardest turn
-        right_speed = int16_t(backward_speed * (1.0f - 2.0f * steer_degree));
-
+        right_speed = map(left_stick_x, STICK_CENTER_MAX, 127, -brake_map, brake_map);
       }
 
-      // Collect the results of the previous logics and set speeds
       spinLeftMotor(left_speed);
       spinRightMotor(right_speed);
-
-    } 
-    
-    else {
+    } else {
       // Straight backward
-      spinLeftMotor(backward_speed);
-      spinRightMotor(backward_speed);
+      spinLeftMotor(left_speed);
+      spinRightMotor(right_speed);
     }
   }
-
 
   // --------------------------
   // 3.2.3 STOP (no trigger / both?)
@@ -280,12 +202,9 @@ void handleGamepad(ControllerPtr ctl) {
   }
 }
 
-
 // =====================================================================
 // 4. Setup
 // =====================================================================
-
-
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -307,12 +226,9 @@ void setup() {
   Serial.println("Bluepad32 robot ready. Pair PS4: HOLD PS + SHARE until light flashes.");
 }
 
-
 // =====================================================================
 // 5. Loop
 // =====================================================================
-
-
 void loop() {
   // Poll Bluepad32 (must be called frequently)
   BP32.update();
