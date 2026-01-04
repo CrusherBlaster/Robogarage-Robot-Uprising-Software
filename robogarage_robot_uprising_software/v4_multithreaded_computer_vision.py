@@ -8,6 +8,7 @@ import math
 from skimage.feature import peak_local_max
 from skimage.segmentation import watershed
 from scipy import ndimage as ndi
+from enum import Enum
 
 USE_TEST_IMAGE = False
 TEST_IMAGE_PATH = r"C:\Users\leevi\Desktop\blue_floorballs_all_hard.png" # developer-provided file
@@ -17,29 +18,73 @@ FRAME_W = 960
 FRAME_H = 960
 FPS = 60
 
+class RobotState(Enum):
+    IDLE = 0 # No specific task
+    GOING_FOR_BALL = 1 # Moving towards a ball
+    CARRYING_BALL = 2 # Has a ball and trying to score
+
 HSV_RANGES = {
     'blue': ((90, 130, 114), (113, 255, 255)),
     'orange': ((0, 127, 168), (10, 255, 255)),
 }
 
 # Store the robot aruco marker corners (coordinates) here by id
+# Note: robot ids are 1,2 for team 1 and 3,4 for team 2
+# if you want to change robot's team simply change their ids accordingly manually
 ROBOT_TEAMS = {
     'team_1': {
-      'id_1': None, 
-      'id_2': None
+      'robot_1': {
+          'id': 1,
+          'corners': None,
+          'bottom_left': None,
+          'bottom_right': None,
+          'bottom_center': None,
+          'center': None,
+          'RobotState': RobotState.IDLE,
+          'has_ball': False
+          
+        }, 
+      'robot_2': {
+          'id': 2,
+          'corners': None,
+          'bottom_left': None,
+          'bottom_right': None,
+          'bottom_center': None,
+          'center': None,
+          'RobotState': RobotState.IDLE,
+          'has_ball': False
+        }
     },
     'team_2': {
-        'id_3': None,
-        'id_4': None
+        'robot_3': {
+          'id': 3,
+          'corners': None,
+          'bottom_left': None,
+          'bottom_right': None,
+          'bottom_center': None,
+          'center': None,
+          'RobotState': RobotState.IDLE,
+          'has_ball': False
+        },
+        'robot_4': {
+          'id': 4,
+          'corners': None,
+          'bottom_left': None,
+          'bottom_right': None,
+          'bottom_center': None,
+          'center': None,
+          'RobotState': RobotState.IDLE,
+          'has_ball': False
+        }
     }
 }
 
 # Define here storage for the fgur corners
 ARENA_CORNERS = {
-    'id_46': None,
-    'id_47': None,
-    'id_48': None,
-    'id_49': None
+    'id_46': {'corners': None, 'center': None},
+    'id_47': {'corners': None, 'center': None},
+    'id_48': {'corners': None, 'center': None},
+    'id_49': {'corners': None, 'center': None}
 }
 
 SMOOTHING_ALPHA = 0.9
@@ -68,12 +113,6 @@ if not USE_TEST_IMAGE:
         cap.set(cv2.CAP_PROP_FPS, FPS)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_W)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
-        #cap.set(cv2.CAP_PROP_S, 5)  # LOWER = faster shutter
-        #cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # manual mode
-        #cap.set(cv2.CAP_PROP_EXPOSURE, -6)        # adjust for your camera, helps with arucos
-        #cap.set(cv2.CAP_PROP_GAIN, 0)
-        # TODO: GET LOWER EXPOSURE FRAME FOR ARUCOS AND NORMAL FRAME FOR BALLS ;) cuz low exposure frame kills hsv masks
-
         
 def get_frame():
     global latest_frame, stop_requested
@@ -100,16 +139,32 @@ def get_frame():
             latest_frame = frame.copy()
 
 def store_corner(marker_id, marker_corners):
-    robot_id = f"id_{marker_id}"
-
+    string_id = f"id_{marker_id}"
+    marker_corners = marker_corners.reshape((4, 2))
+    # Compute center of marker
+    center_x = int(np.mean(marker_corners[:, 0]))
+    center_y = int(np.mean(marker_corners[:, 1]))
+    center = (center_x, center_y)
+    
+    # Compute plower direction vector
+    bottom_center_x = int((marker_corners[2, 0] + marker_corners[3, 0]) / 2)
+    bottom_center_y = int((marker_corners[2, 1] + marker_corners[3, 1]) / 2)
+    bottom_center = (bottom_center_x, bottom_center_y)
+    
     # Update robot teams
-    for team in ROBOT_TEAMS.values():
-        if robot_id in team:
-            team[robot_id] = marker_corners
+    for robots in ROBOT_TEAMS.values():
+        for robot in robots.values():
+            if marker_id == robot['id']:
+                robot['corners'] = marker_corners 
+                robot['bottom_left'] = tuple(marker_corners[3].astype(int))
+                robot['bottom_right'] = tuple(marker_corners[2].astype(int))
+                robot['center'] = center
+                robot['bottom_center'] = bottom_center
 
     # Update arena corners
-    if robot_id in ARENA_CORNERS:
-        ARENA_CORNERS[robot_id] = marker_corners
+    if string_id in ARENA_CORNERS:
+        ARENA_CORNERS[marker_id]['corners'] = marker_corners
+        ARENA_CORNERS[marker_id]['center'] = center
 
 
 def get_aruco():
@@ -127,7 +182,6 @@ def get_aruco():
             latest_corners, latest_ids = corners, ids
         time.sleep(0.005)
 
-
 def compute_circularity(contour):
     area = cv2.contourArea(contour)
     perimeter = cv2.arcLength(contour, True)
@@ -135,6 +189,14 @@ def compute_circularity(contour):
         return 0.0
     return 4.0 * math.pi * area / (perimeter * perimeter)
 
+def check_ball_possession(robot_parameters, balls_tracked, max_distance=30):
+    rx, ry = robot_parameters['bottom_center']
+    for ball_data in balls_tracked.values():
+        bx, by = ball_data['smoothed_center_x'], ball_data['smoothed_center_y']
+        distance = math.hypot(rx - bx, ry - by)
+        if distance < max_distance:
+            return True
+    return False
 
 def process_and_display():
     global latest_frame, latest_corners, latest_ids, balls_tracked, next_local_ball_id, ball_count, stop_requested, debug_1, debug_2, debug_3
@@ -282,35 +344,55 @@ def process_and_display():
             if latest_ids is not None and latest_corners is not None and len(latest_ids) > 0:
                 
                 for i, marker_id in enumerate(latest_ids.flatten()):
-                    marker_corners = latest_corners[i][0]  # shape (4,2)
-
-                    # Compute center of marker
-                    center_x = int(np.mean(marker_corners[:, 0]))
-                    center_y = int(np.mean(marker_corners[:, 1]))
-                    center = (center_x, center_y)
-
-                    # Convert id to string for dictionary
+                    
                     key = f"id_{marker_id}"
-
+                    
                     # ------------ ROBOTS ------------
-                    for team_name, team in ROBOT_TEAMS.items():
-                        if key in team:
-                            cv2.putText(
-                                display,
-                                f"{team_name} robot {marker_id}",
-                                center,
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.6,
-                                (0, 255, 255),
-                                2
-                            )
+                    for team_name, robots in ROBOT_TEAMS.items():
+                        for robot_name, robot_parameters in robots.items():
+                            if marker_id == robot_parameters['id']:
+                                
+                                # Draw plower direction vector
+                                if robot_parameters['bottom_center'] is not None and robot_parameters['center'] is not None:
+                                    cv2.arrowedLine(
+                                        display,
+                                        robot_parameters['center'],
+                                        robot_parameters['bottom_center'],
+                                        (0, 255, 255),
+                                        2,
+                                        tipLength=0.3
+                                    )
+                                
+                                # update robot state
+                                if check_ball_possession(robot_parameters, balls_tracked):
+                                    robot_parameters['has_ball'] = True
+                                    robot_parameters['state'] = RobotState.CARRYING_BALL
+                                else:
+                                    robot_parameters['has_ball'] = False
+                                    robot_parameters['state'] = RobotState.GOING_FOR_BALL
+                                
+                                # visualize ball possession
+                                if robot_parameters['center'] is not None:
+                                    text = "Ball" if robot_parameters['has_ball'] else "No Ball"
+                                    color = (0,255,0) if robot_parameters['has_ball'] else (0,0,255)
+                                    cv2.putText(display, text, (robot_parameters['center'][0], robot_parameters['center'][1] - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                                    
+                                cv2.putText(
+                                    display,
+                                    f"{team_name} robot {marker_id}",
+                                    (robot_parameters['center']),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.6,
+                                    (0, 255, 255),
+                                    2
+                                )
 
                     # ------------ ARENA CORNERS ------------
                     if key in ARENA_CORNERS:
                         cv2.putText(
                             display,
                             f"Arena corner {marker_id}",
-                            (center_x + 10, center_y + 10),
+                            (ARENA_CORNERS[key]['center']),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             0.6,
                             (255, 0, 0),
