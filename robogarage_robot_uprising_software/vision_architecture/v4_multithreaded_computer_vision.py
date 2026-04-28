@@ -1,5 +1,45 @@
 
 
+"""
+Multithreaded Robust Ball and ArUco Detection System
+
+This module implements a real-time computer vision system for detecting,
+tracking, and analyzing multiple robots and colored balls in a competitive
+arena environment.
+
+Core functionality:
+- Captures live video (or uses a test image).
+- Detects ArUco markers for robot and arena localization.
+- Segments and detects colored balls using HSV thresholding.
+- Separates overlapping small objects via watershed segmentation.
+- Tracks balls across frames with distance-based matching and exponential smoothing.
+- Determines ball possession based on proximity to robot orientation vector.
+- Maintains robot behavioral states (IDLE, GOING_FOR_BALL, CARRYING_BALL).
+- Visualizes all detection results in real time.
+
+Architecture:
+The system runs three concurrent threads:
+1. Frame acquisition
+2. ArUco marker detection
+3. Ball detection, tracking, state evaluation, and visualization
+
+Synchronization between threads is handled using thread locks to ensure
+safe access to shared data structures.
+
+Intended use:
+Designed for robotic competition environments requiring reliable
+multi-object tracking, robot state inference, and robust handling
+of overlapping circular objects.
+"""
+
+
+# ============================================================
+# 0. Initializing libraries, constants, and global variables
+# ============================================================
+
+
+# --- 0.1. Libraries  ---
+
 import cv2
 import numpy as np
 import threading
@@ -10,101 +50,20 @@ from skimage.segmentation import watershed
 from scipy import ndimage as ndi
 from enum import Enum
 
-USE_TEST_IMAGE = False
-TEST_IMAGE_PATH = r"C:\Users\leevi\Desktop\blue_floorballs_all_hard.png" # developer-provided file
 
+# --- 0.2. Camera and images  ---
+
+# Set to True to use a static test image instead of live camera feed for debugging.
+USE_TEST_IMAGE = False
+TEST_IMAGE_PATH = r"C:\Users\leevi\Desktop\blue_floorballs_all_hard.png" 
+
+# Camera settings - adjust as needed for your camera and environment
 CAMERA_INDEX = 0
 FRAME_W = 960
 FRAME_H = 960
 FPS = 60
 
-class RobotState(Enum):
-    IDLE = 0 # No specific task
-    GOING_FOR_BALL = 1 # Moving towards a ball
-    CARRYING_BALL = 2 # Has a ball and trying to score
-
-HSV_RANGES = {
-    'blue': ((90, 130, 114), (113, 255, 255)),
-    'orange': ((0, 127, 168), (10, 255, 255)),
-}
-
-# Store the robot aruco marker corners (coordinates) here by id
-# Note: robot ids are 1,2 for team 1 and 3,4 for team 2
-# if you want to change robot's team simply change their ids accordingly manually
-ROBOT_TEAMS = {
-    'team_1': {
-      'robot_1': {
-          'id': 1,
-          'corners': None,
-          'bottom_left': None,
-          'bottom_right': None,
-          'bottom_center': None,
-          'center': None,
-          'RobotState': RobotState.IDLE,
-          'has_ball': False
-          
-        }, 
-      'robot_2': {
-          'id': 2,
-          'corners': None,
-          'bottom_left': None,
-          'bottom_right': None,
-          'bottom_center': None,
-          'center': None,
-          'RobotState': RobotState.IDLE,
-          'has_ball': False
-        }
-    },
-    'team_2': {
-        'robot_3': {
-          'id': 3,
-          'corners': None,
-          'bottom_left': None,
-          'bottom_right': None,
-          'bottom_center': None,
-          'center': None,
-          'RobotState': RobotState.IDLE,
-          'has_ball': False
-        },
-        'robot_4': {
-          'id': 4,
-          'corners': None,
-          'bottom_left': None,
-          'bottom_right': None,
-          'bottom_center': None,
-          'center': None,
-          'RobotState': RobotState.IDLE,
-          'has_ball': False
-        }
-    }
-}
-
-# Define here storage for the fgur corners
-ARENA_CORNERS = {
-    'id_46': {'corners': None, 'center': None},
-    'id_47': {'corners': None, 'center': None},
-    'id_48': {'corners': None, 'center': None},
-    'id_49': {'corners': None, 'center': None}
-}
-
-SMOOTHING_ALPHA = 0.9
-
-frame_lock = threading.Lock()
-aruco_lock = threading.Lock()
-balls_lock = threading.Lock()
-
-latest_frame = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
-latest_corners = None
-latest_ids = None
-stop_requested = False
-
-balls_tracked = {}
-next_local_ball_id = 0
-ball_count = 0
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-aruco_params = cv2.aruco.DetectorParameters()
-aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
-
+# Initializing camera capture
 if not USE_TEST_IMAGE:
     cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
     if not cap.isOpened():
@@ -113,7 +72,123 @@ if not USE_TEST_IMAGE:
         cap.set(cv2.CAP_PROP_FPS, FPS)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_W)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
+
+
+# --- 0.3. Detection parameters  ---
+
+# Aruco
+# Aruco dictionary selection here by size, etc.
+aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+# adjust parameters for better detection in your environment if needed
+aruco_params = cv2.aruco.DetectorParameters()
+aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
+
+# Balls on detection
+balls_tracked = {}
+next_local_ball_id = 0
+ball_count = 0
+
+
+# --- 0.4. Data structures for detected physical objects  ---
+
+# Store detected ArUco marker corners for the arena corner markers
+ARENA_CORNERS = {
+    'id_46': {'corners': None, 'center': None},
+    'id_47': {'corners': None, 'center': None},
+    'id_48': {'corners': None, 'center': None},
+    'id_49': {'corners': None, 'center': None}
+}
+
+# Define robot states for defining their behavior based on ball possession and movement
+class RobotState(Enum):
+    IDLE = 0 # No specific task
+    GOING_FOR_BALL = 1 # Moving towards a ball
+    CARRYING_BALL = 2 # Has a ball and trying to score
+
+# Define robot teams and robot parameters, store their data here etc. 
+ROBOT_TEAMS = {
+    'team_1': {
+      'robot_1': {
+            'id': 1,
+            'corners': None,
+            'bottom_left': None,
+            'bottom_right': None,
+            'bottom_center': None,
+            'center': None,
+            'RobotState': RobotState.IDLE,
+            'has_ball': False  
+        }, 
+      'robot_2': {
+            'id': 2,
+            'corners': None,
+            'bottom_left': None,
+            'bottom_right': None,
+            'bottom_center': None,
+            'center': None,
+            'RobotState': RobotState.IDLE,
+            'has_ball': False
+        }
+    },
+    'team_2': {
+        'robot_3': {
+            'id': 3,
+            'corners': None,
+            'bottom_left': None,
+            'bottom_right': None,
+            'bottom_center': None,
+            'center': None,
+            'RobotState': RobotState.IDLE,
+            'has_ball': False
+        },
+        'robot_4': {
+            'id': 4,
+            'corners': None,
+            'bottom_left': None,
+            'bottom_right': None,
+            'bottom_center': None,
+            'center': None,
+            'RobotState': RobotState.IDLE,
+            'has_ball': False
+        }
+    }
+}
+
+# Add more ball colors and their HSV ranges as needed
+HSV_RANGES = {
+    'blue': ((90, 130, 114), (113, 255, 255)),
+    'orange': ((0, 127, 168), (10, 255, 255)),
+}
+
+
+# --- 0.5. Detection and tracking visualization parameters  ---
+
+# Initial values before analysis starts, will be updated by threads
+latest_frame = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+latest_corners = None
+latest_ids = None
+
+# Locks for synchronizing access to shared data between threads
+frame_lock = threading.Lock()
+aruco_lock = threading.Lock()
+balls_lock = threading.Lock()
+
+# lower values smooth more but react slower to ball detection changes
+SMOOTHING_ALPHA = 0.9
+
+
+# --- 0.6. Error handling, debugging, misc  ---
+
+# For stopping threads gracefully
+stop_requested = False
+
+
+# ============================================================
+# 1. Functions for each thread
+# ============================================================
+
         
+# --- 1.1. Capture thread - Frame distribution from the cap object ---
+
 def get_frame():
     global latest_frame, stop_requested
     if USE_TEST_IMAGE:
@@ -138,6 +213,9 @@ def get_frame():
         with frame_lock:
             latest_frame = frame.copy()
 
+# --- 1.2. Aruco thread - detection and storing arucos ---
+
+# Deliver and sort corner info to storage for all aruco objects
 def store_corner(marker_id, marker_corners):
     string_id = f"id_{marker_id}"
     marker_corners = marker_corners.reshape((4, 2))
@@ -166,7 +244,7 @@ def store_corner(marker_id, marker_corners):
         ARENA_CORNERS[marker_id]['corners'] = marker_corners
         ARENA_CORNERS[marker_id]['center'] = center
 
-
+# Detect AruCo markers and store them
 def get_aruco():
     global latest_corners, latest_ids, latest_frame, stop_requested
     while not stop_requested:
@@ -176,31 +254,28 @@ def get_aruco():
         
         corners, ids, rejected = aruco_detector.detectMarkers(gray)
         if ids is not None and len(corners) > 0:
+            # Enable iteration for pairing ids with their correct corner coordinates
             for i, marker_id in enumerate(ids.flatten()):
                 store_corner(marker_id, corners[i])
         with aruco_lock:
             latest_corners, latest_ids = corners, ids
         time.sleep(0.005)
 
-def compute_circularity(contour):
-    area = cv2.contourArea(contour)
-    perimeter = cv2.arcLength(contour, True)
-    if perimeter <= 1e-6:
-        return 0.0
-    return 4.0 * math.pi * area / (perimeter * perimeter)
-
-def check_ball_possession(robot_parameters, balls_tracked, max_distance=30):
-    rx, ry = robot_parameters['bottom_center']
-    for ball_data in balls_tracked.values():
-        bx, by = ball_data['smoothed_center_x'], ball_data['smoothed_center_y']
-        distance = math.hypot(rx - bx, ry - by)
-        if distance < max_distance:
-            return True
-    return False
+# --- 1.3. Process thread - arena, aruco and ball detection and detection indicators/visualizations  ---
 
 def process_and_display():
     global latest_frame, latest_corners, latest_ids, balls_tracked, next_local_ball_id, ball_count, stop_requested, debug_1, debug_2, debug_3
     
+    def compute_circularity(contour):
+        area = cv2.contourArea(contour)
+        perimeter = cv2.arcLength(contour, True)
+        if perimeter <= 1e-6:
+            return 0.0
+        return 4.0 * math.pi * area / (perimeter * perimeter)
+
+    
+    
+    # Update the tracking information for a ball that has been matched to an existing tracked ball
     def update_tracked_ball(local_id, x, y, r, color):
         now = time.time()
         entry = balls_tracked.get(local_id)
@@ -215,6 +290,7 @@ def process_and_display():
         sr = entry['smoothed_radius'] * (1.0 - SMOOTHING_ALPHA) + r * SMOOTHING_ALPHA
         entry.update({'center_x': x, 'center_y': y, 'radius': r, 'last_seen': now, 'smoothed_center_x': sx, 'smoothed_center_y': sy, 'smoothed_radius': sr})
 
+    # Register a new ball that has not been matched to existing tracked balls
     def register_new_tracked_ball(x, y, r, color):
         global next_local_ball_id
         lid = next_local_ball_id
@@ -222,12 +298,13 @@ def process_and_display():
         balls_tracked[lid] = {'center_x': x, 'center_y': y, 'radius': r, 'color': color, 'last_seen': time.time(),
                               'smoothed_center_x': x, 'smoothed_center_y': y, 'smoothed_radius': r}
         return lid
+    
 
     def match_detections_to_tracked(detections):
         assigned = set()
         used_tracked = set()
-
         tracked_items = list(balls_tracked.items())  
+        
         for det in detections:
             x, y, r, color = det
             best_id = None
@@ -243,12 +320,15 @@ def process_and_display():
                 if best_dist is None or dist < best_dist:
                     best_dist = dist
                     best_id = tid
+            
+            # Determining whether this is an existing tracked ball or a new one based on distance and radius
             if best_id is not None and best_dist < max(30, r * 1.5):
                 update_tracked_ball(best_id, x, y, r, color)
                 used_tracked.add(best_id)
             else:
                 register_new_tracked_ball(x, y, r, color)
-
+        
+        # Remove old balls that have not been seen for a while
         now = time.time()
         to_delete = []
         for tid, tdata in list(balls_tracked.items()):
@@ -257,6 +337,16 @@ def process_and_display():
         for tid in to_delete:
             del balls_tracked[tid]
 
+    def check_ball_possession(robot_parameters, balls_tracked, max_distance=30):
+        rx, ry = robot_parameters['bottom_center']
+        for ball_data in balls_tracked.values():
+            bx, by = ball_data['smoothed_center_x'], ball_data['smoothed_center_y']
+            distance = math.hypot(rx - bx, ry - by)
+            if distance < max_distance:
+                return True
+        return False
+    
+    
     while not stop_requested:
         with frame_lock:
             frame = latest_frame.copy()
@@ -420,6 +510,11 @@ def process_and_display():
     if not USE_TEST_IMAGE:
         cap.release()
     cv2.destroyAllWindows()
+
+
+# ============================================================
+# 2. Excecuting and Running the threads and the main loop
+# ============================================================
 
 capture_thread = threading.Thread(target=get_frame, daemon=True)
 aruco_thread = threading.Thread(target=get_aruco, daemon=True)

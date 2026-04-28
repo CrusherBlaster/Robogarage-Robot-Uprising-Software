@@ -5,7 +5,6 @@
 // =====================================================================
 
 
-// Robots ID 1-3:
 #define LEFT_DIR_FORWARD    23
 #define LEFT_DIR_BACKWARD   21
 #define LEFT_PWM            19
@@ -14,14 +13,7 @@
 #define RIGHT_PWM           32
 
 
-/* Robot ID 4:
-#define LEFT_DIR_FORWARD    21
-#define LEFT_DIR_BACKWARD   23
-#define LEFT_PWM            19
-#define RIGHT_DIR_FORWARD   33
-#define RIGHT_DIR_BACKWARD  25
-#define RIGHT_PWM           32 
-*/
+
 
 const uint8_t MAX_SPEED = 255;
 
